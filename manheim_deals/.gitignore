@@ -1,0 +1,5 @@
+.env
+mmr_cache.json
+deals_ranked.xlsx
+__pycache__/
+*.pyc
