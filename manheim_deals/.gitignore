@@ -3,3 +3,5 @@ mmr_cache.json
 deals_ranked.xlsx
 __pycache__/
 *.pyc
+
+vins_for_manheim.xlsx

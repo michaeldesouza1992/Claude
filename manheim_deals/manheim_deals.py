@@ -251,6 +251,83 @@ def save_cache(path: str, cache: dict) -> None:
     Path(path).write_text(json.dumps(cache, indent=2))
 
 
+# --- VIN list export / MMR file merge (no-API path) ---------------------------
+def export_vin_list(vehicles: list[Vehicle], out_path: str) -> None:
+    """Write VIN + mileage (+ reference columns) for a Manheim batch MMR upload."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "VINs"
+    ws.append(["VIN", "Odometer", "Unit", "Year", "Make", "Model", "AskPrice", "Section"])
+    for v in vehicles:
+        ws.append([v.vin, v.miles, v.unit, v.year, v.make, v.model, v.ask_price, v.section])
+    wb.save(out_path)
+    print(f"Wrote {len(vehicles)} VINs to {out_path}")
+    print("Upload this to Manheim's batch MMR tool (or export the MMR column from "
+          "Dealer Center), then run again with:  --mmr-file <the_result_file>")
+
+
+def load_mmr_file(path: str) -> dict[str, int]:
+    """Load a VIN -> MMR mapping from a Manheim batch export or Dealer Center export.
+
+    Accepts .xlsx or .csv. Auto-detects the VIN column and the MMR/value column by
+    header name, so it tolerates the varied layouts these exports come in.
+    """
+    p = Path(path)
+    rows: list[list] = []
+    if p.suffix.lower() in (".xlsx", ".xlsm"):
+        wb = openpyxl.load_workbook(path, data_only=True)
+        ws = wb.active
+        rows = [[c.value for c in row] for row in ws.iter_rows()]
+    else:
+        import csv
+        with p.open(newline="") as f:
+            rows = [r for r in csv.reader(f)]
+
+    if not rows:
+        sys.exit(f"{path} is empty.")
+
+    # Find the header row (first row containing something VIN-like).
+    header_idx = 0
+    for i, row in enumerate(rows[:10]):
+        if any(str(c).strip().lower() == "vin" or "vin" in str(c).strip().lower() for c in row if c):
+            header_idx = i
+            break
+    header = [str(c).strip().lower() if c is not None else "" for c in rows[header_idx]]
+
+    def find_col(candidates) -> Optional[int]:
+        for idx, h in enumerate(header):
+            if h in candidates:
+                return idx
+        for idx, h in enumerate(header):  # loose contains match
+            if any(c in h for c in candidates):
+                return idx
+        return None
+
+    vin_col = find_col({"vin"})
+    mmr_col = find_col({
+        "mmr", "wholesale", "adjustedmmr", "adjusted mmr", "mmr value",
+        "market value", "base mmr", "value",
+    })
+    if vin_col is None or mmr_col is None:
+        sys.exit(
+            f"Couldn't find VIN and MMR columns in {path}.\n"
+            f"Headers seen: {header}\n"
+            "Rename the value column to include 'MMR' or 'Wholesale' and retry."
+        )
+
+    mapping: dict[str, int] = {}
+    for row in rows[header_idx + 1:]:
+        if len(row) <= max(vin_col, mmr_col):
+            continue
+        vin = str(row[vin_col] or "").strip().upper()
+        mmr = _as_int(row[mmr_col])
+        if vin and mmr:
+            mapping[vin] = mmr
+    print(f"Loaded {len(mapping)} VIN->MMR values (VIN col '{header[vin_col]}', "
+          f"MMR col '{header[mmr_col]}').")
+    return mapping
+
+
 # --- Main ---------------------------------------------------------------------
 def main() -> None:
     ap = argparse.ArgumentParser(description="Manheim MMR deal finder")
@@ -265,6 +342,11 @@ def main() -> None:
     ap.add_argument("--cache", default="mmr_cache.json")
     ap.add_argument("--out", default="deals_ranked.xlsx")
     ap.add_argument("--sleep", type=float, default=0.2, help="Seconds between API calls.")
+    ap.add_argument("--export-vins", metavar="PATH",
+                    help="Write a VIN + mileage list (for Manheim batch MMR upload) and exit.")
+    ap.add_argument("--mmr-file", metavar="PATH",
+                    help="Merge a VIN->MMR file (Manheim batch export / Dealer Center export) "
+                         "instead of calling the API. Offline, no credentials needed.")
     args = ap.parse_args()
 
     load_dotenv()
@@ -279,6 +361,31 @@ def main() -> None:
 
     if args.limit:
         vehicles = vehicles[: args.limit]
+
+    # --- Mode: export VIN list for Manheim batch MMR upload -------------------
+    if args.export_vins:
+        export_vin_list(vehicles, args.export_vins)
+        return
+
+    # --- Mode: merge an MMR export (no API, no credentials) -------------------
+    if args.mmr_file:
+        mapping = load_mmr_file(args.mmr_file)
+        matched = 0
+        for v in vehicles:
+            mmr = mapping.get(v.vin.upper().strip())
+            if mmr:
+                v.mmr = mmr
+                if v.ask_price:
+                    v.spread = v.mmr - v.ask_price
+                    v.margin = round(v.spread / v.mmr, 4)
+                else:
+                    v.note = "no asking price"
+                matched += 1
+            else:
+                v.note = "no MMR in file for this VIN"
+        print(f"Matched MMR for {matched}/{len(vehicles)} vehicles from {args.mmr_file}")
+        write_output(vehicles, args.out, args.min_margin)
+        return
 
     if args.dry_run:
         by_section: dict[str, int] = {}
