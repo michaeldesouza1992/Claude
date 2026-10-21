@@ -1,0 +1,35 @@
+{
+  "name": "Montanna Zelle - SMS Webhook (teste)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "montanna-zelle",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "b1f0c6a2-0001-4a7e-9a10-montannazel01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "montanna-zelle"
+    },
+    {
+      "parameters": {},
+      "id": "b1f0c6a2-0002-4a7e-9a10-montannazel02",
+      "name": "SMS recebido (sem Monday ainda)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [480, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "SMS recebido (sem Monday ainda)", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false
+}
